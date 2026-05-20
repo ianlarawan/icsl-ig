@@ -263,3 +263,203 @@ def fetch_existing_apk_names() -> List[str]:
         ]
     except Exception:
         return []
+
+
+# ---------------------------------------------------------------------------
+# Matrix planning
+# ---------------------------------------------------------------------------
+def build_full_matrix() -> List[dict]:
+    """Expand patch-config + arch-config into the full per-arch matrix."""
+    patch_list = load_patch_config()
+    arch_map = load_arch_config()
+    matrix: List[dict] = []
+    seen = set()
+    for entry in patch_list:
+        app = entry.get("app_name")
+        src = entry.get("source")
+        if not app or not src:
+            continue
+        arches = arch_map.get((app, src), ["universal"])
+        for arch in arches:
+            key = (app, src, arch)
+            if key in seen:
+                continue
+            seen.add(key)
+            matrix.append({"app_name": app, "source": src, "arch": arch})
+    return matrix
+
+
+def make_manifest_key(app: str, source: str, arch: str) -> str:
+    return f"{app}|{source}|{arch}"
+
+
+def plan_incremental(full_matrix: List[dict], old_manifest: Optional[dict],
+                     existing_apks: List[str]) -> Tuple[List[dict], List[str], dict]:
+    """Decide which entries need rebuilding.
+    Returns (build_matrix, carry_over_apks, new_manifest_entries)."""
+    old_entries = (old_manifest or {}).get("entries", {}) if isinstance(old_manifest, dict) else {}
+    existing_apk_set = set(existing_apks)
+
+    build_matrix: List[dict] = []
+    carry_over: List[str] = []
+    new_entries: dict = {}
+
+    for entry in full_matrix:
+        app = entry["app_name"]
+        src = entry["source"]
+        arch = entry["arch"]
+        mkey = make_manifest_key(app, src, arch)
+
+        cur_app_ver = load_app_config_version(app)            # '' if 'latest'
+        cur_src_sig = get_source_signature(src)
+
+        new_entries[mkey] = {
+            "app_name": app,
+            "source": src,
+            "arch": arch,
+            "config_version": cur_app_ver,
+            "source_sig": cur_src_sig,
+            # apk filename is filled in *after* build by the workflow; for now
+            # carry over whatever the old manifest had so we know what to keep.
+            "apk": (old_entries.get(mkey) or {}).get("apk", ""),
+        }
+
+        reasons: List[str] = []
+        if FORCE_FULL:
+            reasons.append("force-rebuild")
+        old = old_entries.get(mkey)
+        if not old:
+            reasons.append("new-entry")
+        else:
+            if old.get("config_version", "") != cur_app_ver:
+                reasons.append(f"app-version: {old.get('config_version','')!r}->{cur_app_ver!r}")
+            if old.get("source_sig", "") != cur_src_sig:
+                reasons.append("patch-source-updated")
+            old_apk = old.get("apk", "")
+            if old_apk and old_apk not in existing_apk_set:
+                reasons.append("apk-missing-from-release")
+            if not old_apk:
+                reasons.append("no-apk-recorded")
+
+        if reasons:
+            logging.info(f"  REBUILD {app}/{src}/{arch}: {'; '.join(reasons)}")
+            build_matrix.append(entry)
+        else:
+            old_apk = old.get("apk", "") if old else ""
+            if old_apk and old_apk in existing_apk_set:
+                carry_over.append(old_apk)
+                logging.info(f"  carry  {app}/{src}/{arch}: {old_apk}")
+            else:
+                # Defensive: if we can't carry it, we must rebuild.
+                logging.info(f"  REBUILD {app}/{src}/{arch}: no carry-over apk")
+                build_matrix.append(entry)
+
+    # The build job in src/__main__.py builds ALL arches for an (app, source) in
+    # one matrix run (it iterates arches from arch-config.json itself). To avoid
+    # duplicate work and to keep the workflow contract unchanged, we deduplicate
+    # the build matrix on (app, source) -- if ANY arch needs rebuild, the whole
+    # (app, source) gets rebuilt and the resulting APKs replace those arches in
+    # the carry-over set.
+    deduped: List[dict] = []
+    seen_pairs = set()
+    for e in build_matrix:
+        pair = (e["app_name"], e["source"])
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        # Strip 'arch' from the matrix entry to match the original schema that
+        # the existing build-apps job expects.
+        deduped.append({"app_name": e["app_name"], "source": e["source"]})
+
+    # Drop carry-overs whose (app, source) is being rebuilt -- the rebuild will
+    # produce fresh APKs for ALL arches of that pair, so the old ones are stale.
+    rebuilding_pairs = seen_pairs
+    filtered_carry: List[str] = []
+    for apk in carry_over:
+        # Determine the (app, source) of this APK by looking up the manifest entry.
+        owner_pair = None
+        for ekey, eval_ in new_entries.items():
+            if eval_.get("apk") == apk:
+                owner_pair = (eval_["app_name"], eval_["source"])
+                break
+        if owner_pair is None or owner_pair not in rebuilding_pairs:
+            filtered_carry.append(apk)
+        else:
+            logging.info(f"  drop carry {apk}: its (app,source) is rebuilding")
+
+    return deduped, filtered_carry, new_entries
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def emit_full_rebuild(reason: str) -> None:
+    """Emergency fallback: build everything (preserves the previous behavior)."""
+    logging.warning(f"Falling back to FULL rebuild: {reason}")
+    full = build_full_matrix()
+    Path("build_matrix.json").write_text(json.dumps(full), encoding="utf-8")
+    Path("carry_over.json").write_text(json.dumps([]), encoding="utf-8")
+    # Empty manifest -> next run will treat everything as 'new-entry' until a
+    # successful build writes a fresh manifest.
+    Path("new_manifest.json").write_text(
+        json.dumps({"entries": {}}, indent=2), encoding="utf-8")
+    write_gh_output("build_matrix", json.dumps(full))
+    write_gh_output("has_updates", "true" if full else "false")
+    write_gh_output("update_count", str(len(full)))
+    write_gh_output("total_count", str(len(full)))
+    write_gh_output("carry_count", "0")
+    write_gh_output("incremental", "false")
+
+
+def main() -> int:
+    try:
+        full = build_full_matrix()
+        logging.info(f"Full matrix: {len(full)} (app, source, arch) entries")
+
+        if FORCE_FULL:
+            logging.info("FORCE_FULL_REBUILD=true -> rebuilding everything")
+            old_manifest = None
+        else:
+            old_manifest = fetch_existing_manifest()
+
+        existing_apks = fetch_existing_apk_names()
+        logging.info(f"Existing release has {len(existing_apks)} APK assets")
+
+        if old_manifest is None and not FORCE_FULL:
+            # No manifest yet -> first incremental run; rebuild everything once
+            # to populate it. (Future runs will be incremental.)
+            emit_full_rebuild("no manifest in existing release (first incremental run)")
+            return 0
+
+        build_mx, carry_over, new_entries = plan_incremental(
+            full, old_manifest, existing_apks)
+
+        Path("build_matrix.json").write_text(json.dumps(build_mx), encoding="utf-8")
+        Path("carry_over.json").write_text(json.dumps(carry_over), encoding="utf-8")
+        Path("new_manifest.json").write_text(
+            json.dumps({"entries": new_entries}, indent=2), encoding="utf-8")
+
+        write_gh_output("build_matrix", json.dumps(build_mx))
+        write_gh_output("has_updates", "true" if build_mx else "false")
+        write_gh_output("update_count", str(len(build_mx)))
+        write_gh_output("total_count", str(len(full)))
+        write_gh_output("carry_count", str(len(carry_over)))
+        write_gh_output("incremental", "true")
+
+        logging.info("=" * 60)
+        logging.info(f"  Total entries:     {len(full)}")
+        logging.info(f"  Need rebuild:      {len(build_mx)}")
+        logging.info(f"  Carry over:        {len(carry_over)}")
+        logging.info("=" * 60)
+
+        return 0
+
+    except Exception as e:
+        logging.error(f"check_app_updates failed: {e}")
+        traceback.print_exc()
+        emit_full_rebuild(f"unexpected error: {e}")
+        return 0  # Never fail the workflow over a planning error.
+
+
+if __name__ == "__main__":
+    sys.exit(main())
