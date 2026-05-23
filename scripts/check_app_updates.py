@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Incremental update checker for Morphe AutoBuilds.
@@ -118,16 +117,37 @@ def load_app_config_version(app_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Source-signature: detect when patch repos publish new releases
 # ---------------------------------------------------------------------------
-_repo_sig_cache: Dict[Tuple[str, str, str], str] = {}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src import utils as provider_utils
+
+_repo_sig_cache: Dict[Tuple[str, str, str, str], str] = {}
 
 
-def fetch_repo_signature(user: str, repo: str, tag: str) -> str:
-    """Get a stable identifier for the current state of a github repo's release.
+def fetch_repo_signature(user: str, repo: str, tag: str, provider: str = "github") -> str:
+    """Get a stable identifier for the current state of a repo's release.
     Returns 'tag_name@published_at' on success, else a short error sentinel."""
-    key = (user, repo, tag)
+    key = (user, repo, tag, provider)
     if key in _repo_sig_cache:
         return _repo_sig_cache[key]
 
+    try:
+        if provider == "gitlab":
+            sig = _fetch_gitlab_signature(user, tag)
+        elif provider == "codeberg":
+            sig = _fetch_codeberg_signature(user, repo, tag)
+        else:
+            sig = _fetch_github_signature(user, repo, tag)
+        _repo_sig_cache[key] = sig
+        return sig
+    except Exception as e:
+        sig = f"err:{tag}"
+        _repo_sig_cache[key] = sig
+        logging.warning(f"  {provider} api failed for {user}/{repo}: {e}")
+        return sig
+
+
+def _fetch_github_signature(user: str, repo: str, tag: str) -> str:
     if tag == "latest":
         api = f"repos/{user}/{repo}/releases/latest"
     elif tag in ("", "dev", "prerelease"):
@@ -137,28 +157,17 @@ def fetch_repo_signature(user: str, repo: str, tag: str) -> str:
 
     rc, out, err = run_gh(["api", api])
     if rc != 0:
-        sig = f"err:{tag}"
-        _repo_sig_cache[key] = sig
-        logging.warning(f"  gh api {api} -> rc={rc} ({err.strip()[:80]})")
-        return sig
+        raise RuntimeError(f"gh api {api} failed: {err.strip()[:80]}")
 
-    try:
-        data = json.loads(out)
-    except Exception:
-        sig = f"badjson:{tag}"
-        _repo_sig_cache[key] = sig
-        return sig
+    data = json.loads(out)
 
-    # If list (per_page query), filter & pick newest
     if isinstance(data, list):
         if tag == "dev":
             data = [r for r in data if "dev" in (r.get("tag_name") or "").lower()]
         elif tag == "prerelease":
             data = [r for r in data if r.get("prerelease")]
         if not data:
-            sig = f"none:{tag}"
-            _repo_sig_cache[key] = sig
-            return sig
+            raise RuntimeError(f"No releases found for {user}/{repo}")
         data.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         rel = data[0]
     else:
@@ -166,9 +175,41 @@ def fetch_repo_signature(user: str, repo: str, tag: str) -> str:
 
     tag_name = rel.get("tag_name") or rel.get("name") or "?"
     published = rel.get("published_at") or rel.get("created_at") or "?"
-    sig = f"{tag_name}@{published}"
-    _repo_sig_cache[key] = sig
-    return sig
+    return f"{tag_name}@{published}"
+
+
+def _fetch_gitlab_signature(project: str, tag: str) -> str:
+    from urllib.parse import quote
+    encoded = quote(project, safe="")
+    if tag == "latest":
+        api = f"https://gitlab.com/api/v4/projects/{encoded}/releases/permalink/latest"
+    elif tag in ("", "dev", "prerelease"):
+        api = f"https://gitlab.com/api/v4/projects/{encoded}/releases"
+    else:
+        api = f"https://gitlab.com/api/v4/projects/{encoded}/releases/{quote(tag, safe='')}"
+
+    data = provider_utils.fetch_json(api)
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    tag_name = data.get("tag_name") or "?"
+    published = data.get("released_at") or data.get("created_at") or "?"
+    return f"{tag_name}@{published}"
+
+
+def _fetch_codeberg_signature(user: str, repo: str, tag: str) -> str:
+    from urllib.parse import quote
+    base = f"https://codeberg.org/api/v1/repos/{user}/{repo}/releases"
+    if tag == "latest":
+        api = f"{base}/latest"
+    elif tag in ("", "dev", "prerelease"):
+        api = base
+    else:
+        api = f"{base}/tags/{quote(tag, safe='')}"
+
+    data = provider_utils.fetch_json(api)
+    tag_name = data.get("tag_name") or "?"
+    published = data.get("published_at") or "?"
+    return f"{tag_name}@{published}"
 
 
 _source_sig_cache: Dict[str, str] = {}
@@ -210,11 +251,23 @@ def get_source_signature(source: str) -> str:
         for entry in data:
             if not isinstance(entry, dict):
                 continue
-            user = entry.get("user")
-            repo = entry.get("repo")
+            provider = (entry.get("provider") or "github").lower().strip()
             tag = entry.get("tag", "latest")
-            if user and repo:
-                parts.append(f"{user}/{repo}@{fetch_repo_signature(user, repo, tag)}")
+            
+            if provider == "gitlab":
+                project = entry.get("project")
+                if project:
+                    parts.append(f"gitlab:{project}@{fetch_repo_signature('', project, tag, provider)}")
+            elif provider == "codeberg":
+                user = entry.get("user")
+                repo = entry.get("repo")
+                if user and repo:
+                    parts.append(f"codeberg:{user}/{repo}@{fetch_repo_signature(user, repo, tag, provider)}")
+            else:
+                user = entry.get("user")
+                repo = entry.get("repo")
+                if user and repo:
+                    parts.append(f"{user}/{repo}@{fetch_repo_signature(user, repo, tag, provider)}")
 
     sig = ";".join(parts) if parts else f"empty:{source}"
     _source_sig_cache[source] = sig
@@ -320,6 +373,8 @@ def _is_unreliable_source_sig(sig: str) -> bool:
     return (
         "@err:" in s
         or "@badjson:" in s
+        or s.startswith("missing-source:")
+        or s.startswith("unparseable:")
     )
 
 
