@@ -282,7 +282,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         # Extracts the Morphe patch version dynamically from the downloaded file
         patchver = release.extract_version(str(patches))
         
-        # Formats file naming pattern strictly to your custom style: youtube17.34.35v1.31.0.apk
+        # Formats file naming pattern strictly to your custom style: youtube-morphe_20.47.62-v1.29.0.apk
         output_custom_name = f"youtube-morphe_{version}-v{patchver}.apk"
         signed_apk = Path(output_custom_name)
 
@@ -302,6 +302,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             utils.run_process([
                 str(apksigner), "sign", "--verbose",
                 "--ks", str(ks_path),
+                "--ks-type", "JKS",  # Forces Java to parse legacy JKS containers cleanly
                 "--ks-pass", f"pass:{ks_pass}",
                 "--key-pass", f"pass:{ks_pass}",
                 "--ks-key-alias", str(ks_alias),
@@ -315,11 +316,16 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 str(apksigner), "sign", "--verbose",
                 "--min-sdk-version", "21",
                 "--ks", str(ks_path),
+                "--ks-type", "JKS",  # Forces legacy parse on fallback run as well
                 "--ks-pass", f"pass:{ks_pass}",
                 "--key-pass", f"pass:{ks_pass}",
                 "--ks-key-alias", str(ks_alias),
                 "--in", str(output_apk), "--out", str(signed_apk)
             ], capture=True, stream=True)
+
+        output_apk.unlink(missing_ok=True)
+        print(f"✅ APK built: {signed_apk.name}")
+        return str(signed_apk)
 
     return None
 
