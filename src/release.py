@@ -5,7 +5,6 @@ from pathlib import Path
 from src import repository, gh
 
 def convert_title(text):
-    # Enforces the combined framework title: "MorpheIG"
     if not text or not isinstance(text, str):
         return text
     if text.lower() == 'instagram':
@@ -18,24 +17,18 @@ def extract_version(file_path):
     path = Path(file_path)
     base_name = path.stem
     
-    # Custom rule for your format: morphe-instagram_426_v3.3.0
-    # Extracts the version "426" before the "_v" division flag
     if '_' in base_name:
         parts = base_name.split('_')
         if len(parts) > 1:
-            # Check if it has a second separation index like _v3.3.0
             ver_part = parts[1].split('-v')[0] if '-v' in parts[1] else parts[1]
-            # Strip a leading 'v' if present in the middle segment
             if ver_part.lower().startswith('v') and not ver_part[1:].isalpha():
                 ver_part = ver_part[1:]
             return ver_part
 
-    # Fallback default rule to find digits
     match = re.search(r'(\d+\.\d+\.\d+|\d{3,})', base_name)
     return match.group(1) if match else 'unknown'
 
 def create_github_release(name, patches_name, cli_name, apk_file_path):
-    # Try to find a valid patches file in the download staging folder to read its version
     patches_dir = Path(".")
     mpp_files = list(patches_dir.glob("*.mpp"))
     rvp_files = list(patches_dir.glob("*.rvp"))
@@ -55,23 +48,26 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
         if patches_name.lower().endswith('.mpp') or 'morphe' in patches_name.lower():
             is_morphe = True
     
-    # Determine CLI configuration identity and brand parameters
     cli_filename = Path(cli_name).name.lower()
     
+    # --- ISOLATED BRANDING ASSIGNMENT LOGIC ---
     if name.lower() == 'instagram':
-        system_branding = "piko"
+        patch_branding = "piko"
+        cli_branding = "Morphe"
         include_microg_note = False
         cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
         cliver = cli_match.group(1) if cli_match else patchver
     elif 'morphe' in cli_filename or is_morphe:
-        system_branding = "Morphe"
+        patch_branding = "Morphe"
+        cli_branding = "Morphe"
         include_microg_note = True
         microg_name = "Morphe MicroG-RE"
         microg_link = "https://github.com/MorpheApp/MicroG-RE"
         cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
         cliver = cli_match.group(1) if cli_match else patchver
     else:
-        system_branding = "ReVanced"
+        patch_branding = "ReVanced"
+        cli_branding = "ReVanced"
         include_microg_note = True
         microg_name = "ReVanced GmsCore"
         microg_link = "https://github.com/revanced/gmscore/releases/latest"
@@ -79,8 +75,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
         cliver = cli_match.group(1) if cli_match else 'unknown'
     
     app_version = extract_version(str(apk_file_path))
-    
-    # --- FIXED INSTAGRAM CUSTOM TAG GENERATION LAYOUT ---
     tag_name = f"mph-ig-{app_version}-{patchver}"
 
     apk_path = Path(apk_file_path)
@@ -89,19 +83,16 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
 
     repo = gh.get_repo(repository)
 
-    # Step 1: Check for existing release with the exact tag name
     try:
         existing_release = repo.get_release(tag_name)
     except:
         existing_release = None
 
-    # Step 2: Delete existing assets if same APK already uploaded
     if existing_release:
         for asset in existing_release.get_assets():
             if asset.name == apk_path.name:
                 asset.delete_asset()
 
-    # Step 3: Delete old releases with matching targets
     releases = list(repo.get_releases())
     suffix_match = re.search(r'(-[a-z]+\.\d+)$', patchver)
     current_suffix = suffix_match.group(1) if suffix_match else ''
@@ -127,14 +118,13 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
             except:
                 pass
 
-    # Step 4: Create new release if it doesn't exist
     if not existing_release:
-        # Dynamically build release body based on MicroG requirement flag
+        # Template now treats the tools independently
         release_body = f"""# Release Notes
 
 ## Build Tools:
-- **{system_branding} Patches:** v{patchver}
-- **{system_branding} CLI:** v{cliver}
+- **{patch_branding} Patches:** v{patchver}
+- **{cli_branding} CLI:** v{cliver}
 """
         if include_microg_note:
             release_body += f"""
@@ -143,7 +133,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
 - Please **download** it from [HERE]({microg_link}).
 """
 
-        # Formats Release Title precisely to: MorpheIG v426-3.3.0
         release_name = f"{convert_title(name)} v{app_version}-{patchver}"
         
         existing_release = repo.create_git_release(
@@ -154,7 +143,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
             prerelease=False
         )
 
-    # Step 5: Upload APK
     existing_release.upload_asset(
         path=str(apk_path),
         label=apk_path.name,
