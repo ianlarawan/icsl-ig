@@ -280,7 +280,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         input_apk.unlink(missing_ok=True)
 
         # Extracts the Morphe patch version dynamically from the downloaded file
-        patchver = utils.extract_version(str(patches))
+        patchver = release.extract_version(str(patches))
         
         # Formats file naming pattern strictly to your custom style: youtube17.34.35v1.31.0.apk
         output_custom_name = f"youtube-morphe_{version}-v{patchver}.apk"
