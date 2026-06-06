@@ -55,29 +55,32 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
         if patches_name.lower().endswith('.mpp') or 'morphe' in patches_name.lower():
             is_morphe = True
     
-    # Determine CLI configuration identity
+    # Determine CLI configuration identity and brand parameters
     cli_filename = Path(cli_name).name.lower()
-    if 'morphe' in cli_filename or is_morphe:
-        is_morphe = True
+    
+    if name.lower() == 'instagram':
+        system_branding = "piko"
+        include_microg_note = False
+        cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
+        cliver = cli_match.group(1) if cli_match else patchver
+    elif 'morphe' in cli_filename or is_morphe:
         system_branding = "Morphe"
+        include_microg_note = True
         microg_name = "Morphe MicroG-RE"
         microg_link = "https://github.com/MorpheApp/MicroG-RE"
-        
-        # Fallback handling for optimized or custom untagged CLI binaries
         cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
         cliver = cli_match.group(1) if cli_match else patchver
     else:
         system_branding = "ReVanced"
+        include_microg_note = True
         microg_name = "ReVanced GmsCore"
         microg_link = "https://github.com/revanced/gmscore/releases/latest"
-        
         cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
         cliver = cli_match.group(1) if cli_match else 'unknown'
     
     app_version = extract_version(str(apk_file_path))
     
     # --- FIXED INSTAGRAM CUSTOM TAG GENERATION LAYOUT ---
-    # Produces exactly: mph-ig-426-3.3.0
     tag_name = f"mph-ig-{app_version}-{patchver}"
 
     apk_path = Path(apk_file_path)
@@ -126,16 +129,20 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
 
     # Step 4: Create new release if it doesn't exist
     if not existing_release:
+        # Dynamically build release body based on MicroG requirement flag
         release_body = f"""# Release Notes
 
 ## Build Tools:
 - **{system_branding} Patches:** v{patchver}
 - **{system_branding} CLI:** v{cliver}
-
+"""
+        if include_microg_note:
+            release_body += f"""
 ## Note:
 **{microg_name}** is **necessary** to function correctly. 
 - Please **download** it from [HERE]({microg_link}).
 """
+
         # Formats Release Title precisely to: MorpheIG v426-3.3.0
         release_name = f"{convert_title(name)} v{app_version}-{patchver}"
         
