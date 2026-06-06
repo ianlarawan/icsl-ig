@@ -290,18 +290,21 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         if not apksigner:
             raise RuntimeError("apksigner not found")
 
-        # Use your custom secrets injected from the workflow env space
+        # Fallbacks prevent NoneType crashes if GitHub Actions environment variables are missing
         ks_path = getenv("KS_PATH", "/tmp/custom.keystore")
-        ks_pass = getenv("KS_PASSWORD")
-        ks_alias = getenv("KEY_ALIAS")
+        ks_pass = getenv("KEYSTORE_PASSWORD", "")
+        ks_alias = getenv("KEY_ALIAS", "")
+
+        if not ks_pass or not ks_alias:
+            logging.warning("⚠️ KEYSTORE_PASSWORD or KEY_ALIAS env variables are completely empty!")
 
         try:
             utils.run_process([
                 str(apksigner), "sign", "--verbose",
-                "--ks", ks_path,
+                "--ks", str(ks_path),
                 "--ks-pass", f"pass:{ks_pass}",
                 "--key-pass", f"pass:{ks_pass}",
-                "--ks-key-alias", ks_alias,
+                "--ks-key-alias", str(ks_alias),
                 "--in", str(output_apk), "--out", str(signed_apk)
             ], capture=True, stream=True)
         except Exception as e:
@@ -311,16 +314,12 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             utils.run_process([
                 str(apksigner), "sign", "--verbose",
                 "--min-sdk-version", "21",
-                "--ks", ks_path,
+                "--ks", str(ks_path),
                 "--ks-pass", f"pass:{ks_pass}",
                 "--key-pass", f"pass:{ks_pass}",
-                "--ks-key-alias", ks_alias,
+                "--ks-key-alias", str(ks_alias),
                 "--in", str(output_apk), "--out", str(signed_apk)
             ], capture=True, stream=True)
-
-        output_apk.unlink(missing_ok=True)
-        print(f"✅ APK built: {signed_apk.name}")
-        return str(signed_apk)
 
     return None
 
