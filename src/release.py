@@ -74,7 +74,13 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
         cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
         cliver = cli_match.group(1) if cli_match else 'unknown'
     
-    tag_name = f"{name}-v{patchver}"
+    app_version = extract_version(str(apk_file_path))
+    
+    # --- CUSTOM TAG GENERATION LAYOUT ---
+    # Normalizes "youtube" to "yt", attaches framework suffix, and generates: yt-mph-20.51.39-1.30.0
+    normalized_name = 'yt' if name.lower() == 'youtube' else name.lower()
+    tag_prefix = 'mph-' if is_morphe else 'rvx-'
+    tag_name = f"{normalized_name}-{tag_prefix}{app_version}-{patchver}"
 
     apk_path = Path(apk_file_path)
     if not apk_path.exists():
@@ -100,18 +106,28 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
     suffix_match = re.search(r'(-[a-z]+\.\d+)$', patchver)
     current_suffix = suffix_match.group(1) if suffix_match else ''
 
+    # Re-normalize check bounds for target cleanups
     for r in releases:
         release_tag = r.tag_name
-        if release_tag.startswith(f"{name}-v") and release_tag != tag_name:
-            old_version = release_tag[len(name) + 2:]
-            old_suffix_match = re.search(r'(-[a-z]+\.\d+)$', old_version)
-            old_suffix = old_suffix_match.group(1) if old_suffix_match else ''
+        if (release_tag.startswith(f"{normalized_name}-{tag_prefix}") or release_tag.startswith(f"{name}-v")) and release_tag != tag_name:
+            # Basic old-release version comparison parsing logic fallback
+            try:
+                old_version = release_tag.split(f"{tag_prefix}")[-1]
+                if '-' in old_version:
+                    old_patchver = old_version.split('-')[-1]
+                else:
+                    old_patchver = old_version
+                
+                old_suffix_match = re.search(r'(-[a-z]+\.\d+)$', old_patchver)
+                old_suffix = old_suffix_match.group(1) if old_suffix_match else ''
 
-            if old_suffix == current_suffix:
-                old_numeric = re.sub(r'(-[a-z]+\.\d+)?(-release\d*)?$', '', old_version)
-                current_numeric = re.sub(r'(-[a-z]+\.\d+)?(-release\d*)?$', '', patchver)
-                if old_numeric < current_numeric:
-                    r.delete_release()
+                if old_suffix == current_suffix:
+                    old_numeric = re.sub(r'(-[a-z]+\.\d+)?(-release\d*)?$', '', old_patchver)
+                    current_numeric = re.sub(r'(-[a-z]+\.\d+)?(-release\d*)?$', '', patchver)
+                    if old_numeric < current_numeric:
+                        r.delete_release()
+            except:
+                pass
 
     # Step 4: Create new release if it doesn't exist
     if not existing_release:
@@ -125,8 +141,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
 **{microg_name}** is **necessary** to function correctly. 
 - Please **download** it from [HERE]({microg_link}).
 """
-        app_version = extract_version(str(apk_file_path))
-        
         # Formats release title layout precisely to: YT Morphe 20.51.39-1.30.0
         release_name = f"{convert_title(name)} Morphe {app_version}-{patchver}"
         
