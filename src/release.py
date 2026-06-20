@@ -28,7 +28,10 @@ def extract_version(file_path):
     match = re.search(r'(\d+\.\d+\.\d+|\d{3,})', base_name)
     return match.group(1) if match else 'unknown'
 
-def create_github_release(name, patches_name, cli_name, apk_file_path):
+def create_github_release(name, patches_name, cli_name, apk_file_path, failed_patches=None):
+    if failed_patches is None:
+        failed_patches = []
+
     patches_dir = Path(".")
     mpp_files = list(patches_dir.glob("*.mpp"))
     rvp_files = list(patches_dir.glob("*.rvp"))
@@ -36,7 +39,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
     
     is_morphe = False
     
-    # Resolve the correct patch version string representation format
     if mpp_files:
         patchver = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', mpp_files[0].stem)
         patchver = patchver.group(1) if patchver else 'unknown'
@@ -50,7 +52,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
         if patches_name.lower().endswith('.mpp') or 'morphe' in patches_name.lower():
             is_morphe = True
             
-    # Resolve the correct CLI execution engine version number string values
     cli_match = None
     if Path(cli_name).exists() and Path(cli_name).is_file():
         cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
@@ -62,7 +63,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
     cliver = cli_match.group(1) if cli_match else 'unknown'
     cli_filename = Path(cli_name).name.lower()
     
-    # Branding assignment engine workflows
     if name.lower() == 'instagram':
         patch_branding = "piko"
         cli_branding = "Morphe"
@@ -125,9 +125,16 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
                 pass
 
     if not existing_release:
-        release_body = f"""# Release Notes
+        # Dynamically compile the warning section block layout structure
+        release_body = "# Release Notes\n\n"
+        
+        if failed_patches:
+            release_body += "### ⚠️ Disclaimer: Failed Patches\nThe following patches could not be installed properly or were skipped this release:\n"
+            for failed_patch in failed_patches:
+                release_body += f"- `{failed_patch}`\n"
+            release_body += "\n---\n\n"
 
-## Build Tools:
+        release_body += f"""## Build Tools:
 - **{patch_branding} Patches:** v{patchver}
 - **{cli_branding} CLI:** v{cliver}
 """
