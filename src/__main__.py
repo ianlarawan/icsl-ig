@@ -314,17 +314,28 @@ def main():
         logging.error("APP_NAME and SOURCE environment variables must be set")
         exit(1)
 
+    # Read arch-config.json
     arch_config_path = Path("arch-config.json")
     if arch_config_path.exists():
         with open(arch_config_path) as f:
             arch_config = json.load(f)
         
-        arches = ["universal"]
+        # Find arches for this app
+        arches = ["universal"]  # default
         for config in arch_config:
             if config["app_name"] == app_name and config["source"] == source:
                 arches = config["arches"]
                 break
         
+        # Scan workspace root directory to resolve downloaded tool file paths dynamically
+        root_files = list(Path(".").glob("*"))
+        detected_patches = utils.find_file(root_files, contains="patches", suffix=".mpp") or utils.find_file(root_files, suffix=".mpp")
+        detected_cli = utils.find_file(root_files, contains="morphe-cli", suffix=".jar") or utils.find_file(root_files, suffix=".jar")
+
+        patches_str = str(detected_patches) if detected_patches else "patches"
+        cli_str = str(detected_cli) if detected_cli else "cli"
+
+        # Build for each architecture
         built_apks = []
         for arch in arches:
             logging.info(f"🔨 Building {app_name} for {arch} architecture...")
@@ -332,8 +343,11 @@ def main():
             if apk_path:
                 built_apks.append(apk_path)
                 print(f"✅ Built {arch} version: {Path(apk_path).name}")
-                release.create_github_release(app_name, str(patches), str(cli), built_apks)
+                
+                # Trigger the GitHub release framework passing verified string parameters
+                release.create_github_release(app_name, patches_str, cli_str, apk_path)
         
+        # Summary
         print(f"\n🎯 Built {len(built_apks)} APK(s) for {app_name}:")
         for apk in built_apks:
             print(f"  📱 {Path(apk).name}")
