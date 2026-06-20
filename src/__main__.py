@@ -88,11 +88,9 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
     # Validate tools
     if not cli:
         logging.error(f"❌ CLI not found for source: {source}")
-        logging.error(f"Available files: {[f.name for f in download_files]}")
         return None
     if not patches:
         logging.error(f"❌ Patches not found for source: {source}")
-        logging.error(f"Available files: {[f.name for f in download_files]}")
         return None
 
     logging.info(f"✅ Using CLI: {cli.name}")
@@ -117,12 +115,9 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
 
     if input_apk is None or not used_method or not version:
         logging.error(f"❌ Failed to download APK for {app_name}")
-        logging.error("All download sources failed. Skipping this app.")
         return None
 
     # Try the downloaded version first, then (if available) older compatible
-    # versions from the patch set. This prevents a single bad/overstated
-    # compatibility entry from breaking the whole build.
     versions_to_try: list[str] = [version]
     if candidates and version in candidates:
         versions_to_try += [v for v in candidates if v != version]
@@ -145,7 +140,6 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             logging.warning(
                 f"Retrying {app_name}/{source}/{arch} with older version {ver} due to patch failure..."
             )
-            # Cleanup any previous attempt artifacts.
             try:
                 input_apk.unlink(missing_ok=True)
             except Exception:
@@ -160,7 +154,6 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         if input_apk.suffix != ".apk":
             logging.warning("Input file is not .apk, using APKEditor to merge")
             apk_editor = downloader.download_apkeditor()
-
             merged_apk = input_apk.with_suffix(".apk")
 
             utils.run_process([
@@ -172,12 +165,10 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             input_apk.unlink(missing_ok=True)
 
             if not merged_apk.exists():
-                logging.error("Merged APK file not found")
                 raise RuntimeError("Merged APK file not found")
 
-            # Clean up filename: remove build number like (1575420) and -1575420
-            clean_name = re.sub(r'\(\d+\)', '', merged_apk.name)  # Remove (1575420)
-            clean_name = re.sub(r'-\d+_', '_', clean_name)  # Remove -1575420_ -> _
+            clean_name = re.sub(r'\(\d+\)', '', merged_apk.name)
+            clean_name = re.sub(r'-\d+_', '_', clean_name)
             if clean_name != merged_apk.name:
                 clean_apk = merged_apk.with_name(clean_name)
                 merged_apk.rename(clean_apk)
@@ -205,7 +196,6 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 "lib/x86/*", "lib/x86_64/*"
             ], silent=True, check=False)
 
-        # FIX: Repair corrupted APK from Uptodown
         logging.info("Checking APK for corruption...")
         try:
             fixed_apk = Path(f"{app_name}-fixed-v{version}.apk")
@@ -220,11 +210,9 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         except Exception as e:
             logging.warning(f"Could not fix APK: {e}")
 
-        # Include architecture in output filename
         output_apk = Path(f"{app_name}-{arch}-patch-v{version}.apk")
 
         try:
-            # USE DIFFERENT COMMANDS BASED ON SOURCE TYPE
             if is_morphe:
                 logging.info("🔧 Using Morphe patching system...")
                 try:
@@ -232,17 +220,19 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                         "java", "-jar", str(cli),
                         "patch", "--patches", str(patches),
                         "--out", str(output_apk), str(input_apk),
+                        "--continue-on-error",
                         *exclude_patches, *include_patches
                     ]
                     utils.run_process(morphe_cmd, capture=True, stream=True)
-                except subprocess.CalledProcessError as e:
-                    # Try alternative Morphe arguments
+                except subprocess.CalledProcessError:
                     logging.info("Trying alternative Morphe command format...")
                     morphe_cmd = [
                         "java", "-jar", str(cli),
+                        "patch",
                         "--patches", str(patches),
                         "--input", str(input_apk),
-                        "--output", str(output_apk)
+                        "--output", str(output_apk),
+                        "--continue-on-error"
                     ]
                     utils.run_process(morphe_cmd, capture=True, stream=True)
             else:
@@ -268,7 +258,6 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                     ], capture=True, stream=True)
 
         except subprocess.CalledProcessError as e:
-            # Remove temp input apk; we'll re-download if retrying.
             input_apk.unlink(missing_ok=True)
             output_apk.unlink(missing_ok=True)
 
@@ -276,14 +265,9 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 continue
             raise
 
-        # Patch succeeded -> cleanup input and sign.
         input_apk.unlink(missing_ok=True)
-
-        # Extracts the Morphe patch version dynamically from the downloaded file
         patchver = release.extract_version(str(patches))
         
-        # --- ENFORCE EXPLICIT CUSTOM BRANDING SCHEME ---
-        # Formats output binary dynamically matching your pattern style: morphe-instagram_426_v3.3.0.apk
         output_custom_name = f"morphe-{app_name.lower()}_{version}_v{patchver}.apk"
         signed_apk = Path(output_custom_name)
 
@@ -291,13 +275,9 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         if not apksigner:
             raise RuntimeError("apksigner not found")
 
-        # Fallbacks prevent NoneType crashes if GitHub Actions environment variables are missing
         ks_path = getenv("KS_PATH", "/tmp/custom.keystore")
         ks_pass = getenv("KEYSTORE_PASSWORD", "")
         ks_alias = getenv("KEY_ALIAS", "")
-
-        if not ks_pass or not ks_alias:
-            logging.warning("⚠️ KEYSTORE_PASSWORD or KEY_ALIAS env variables are completely empty!")
 
         try:
             utils.run_process([
@@ -309,9 +289,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 "--in", str(output_apk), "--out", str(signed_apk)
             ], capture=True, stream=True)
         except Exception as e:
-            logging.warning(f"Standard signing failed: {e}")
-            logging.info("Trying alternative signing method...")
-
+            logging.warning(f"Standard signing failed: {e}. Trying fallback...")
             utils.run_process([
                 str(apksigner), "sign", "--verbose",
                 "--min-sdk-version", "21",
@@ -336,20 +314,17 @@ def main():
         logging.error("APP_NAME and SOURCE environment variables must be set")
         exit(1)
 
-    # Read arch-config.json
     arch_config_path = Path("arch-config.json")
     if arch_config_path.exists():
         with open(arch_config_path) as f:
             arch_config = json.load(f)
         
-        # Find arches for this app
-        arches = ["universal"]  # default
+        arches = ["universal"]
         for config in arch_config:
             if config["app_name"] == app_name and config["source"] == source:
                 arches = config["arches"]
                 break
         
-        # Build for each architecture
         built_apks = []
         for arch in arches:
             logging.info(f"🔨 Building {app_name} for {arch} architecture...")
@@ -357,17 +332,13 @@ def main():
             if apk_path:
                 built_apks.append(apk_path)
                 print(f"✅ Built {arch} version: {Path(apk_path).name}")
-                
-                # Trigger the GitHub release creation framework natively
                 release.create_github_release(app_name, "patches", "cli", apk_path)
         
-        # Summary
         print(f"\n🎯 Built {len(built_apks)} APK(s) for {app_name}:")
         for apk in built_apks:
             print(f"  📱 {Path(apk).name}")
         
     else:
-        # Fallback to single universal build
         logging.warning("arch-config.json not found, building universal only")
         apk_path = run_build(app_name, source, "universal")
         if apk_path:
