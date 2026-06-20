@@ -32,9 +32,11 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
     patches_dir = Path(".")
     mpp_files = list(patches_dir.glob("*.mpp"))
     rvp_files = list(patches_dir.glob("*.rvp"))
+    jar_files = list(patches_dir.glob("*.jar"))
     
     is_morphe = False
     
+    # Resolve the correct patch version string representation format
     if mpp_files:
         patchver = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', mpp_files[0].stem)
         patchver = patchver.group(1) if patchver else 'unknown'
@@ -47,32 +49,36 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
         patchver = patchver.group(1) if patchver else 'unknown'
         if patches_name.lower().endswith('.mpp') or 'morphe' in patches_name.lower():
             is_morphe = True
+            
+    # Resolve the correct CLI execution engine version number string values
+    cli_match = None
+    if Path(cli_name).exists() and Path(cli_name).is_file():
+        cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
     
+    if not cli_match and jar_files:
+        cli_target = next((f for f in jar_files if "cli" in f.name.lower()), jar_files[0])
+        cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', cli_target.stem)
+        
+    cliver = cli_match.group(1) if cli_match else 'unknown'
     cli_filename = Path(cli_name).name.lower()
     
-    # --- ISOLATED BRANDING ASSIGNMENT LOGIC ---
+    # Branding assignment engine workflows
     if name.lower() == 'instagram':
         patch_branding = "piko"
         cli_branding = "Morphe"
         include_microg_note = False
-        cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
-        cliver = cli_match.group(1) if cli_match else patchver
-    elif 'morphe' in cli_filename or is_morphe:
+    elif 'morphe' in cli_filename or is_morphe or cliver != 'unknown':
         patch_branding = "Morphe"
         cli_branding = "Morphe"
         include_microg_note = True
         microg_name = "Morphe MicroG-RE"
         microg_link = "https://github.com/MorpheApp/MicroG-RE"
-        cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
-        cliver = cli_match.group(1) if cli_match else patchver
     else:
         patch_branding = "ReVanced"
         cli_branding = "ReVanced"
         include_microg_note = True
         microg_name = "ReVanced GmsCore"
         microg_link = "https://github.com/revanced/gmscore/releases/latest"
-        cli_match = re.search(r'(\d+\.\d+\.\d+(-[a-z]+\.\d+)?(-release\d*)?)', Path(cli_name).stem)
-        cliver = cli_match.group(1) if cli_match else 'unknown'
     
     app_version = extract_version(str(apk_file_path))
     tag_name = f"mph-ig-{app_version}-{patchver}"
@@ -119,7 +125,6 @@ def create_github_release(name, patches_name, cli_name, apk_file_path):
                 pass
 
     if not existing_release:
-        # Template now treats the tools independently
         release_body = f"""# Release Notes
 
 ## Build Tools:
