@@ -332,7 +332,7 @@ def main():
             if apk_path:
                 built_apks.append(apk_path)
                 print(f"✅ Built {arch} version: {Path(apk_path).name}")
-                release.create_github_release(app_name, "patches", "cli", apk_path)
+                release.create_github_release(app_name, str(patches), str(cli), built_apks)
         
         print(f"\n🎯 Built {len(built_apks)} APK(s) for {app_name}:")
         for apk in built_apks:
