@@ -232,6 +232,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                         "java", "-jar", str(cli),
                         "patch", "--patches", str(patches),
                         "--out", str(output_apk), str(input_apk),
+                        "--continue-on-error",
                         *exclude_patches, *include_patches
                     ]
                     utils.run_process(morphe_cmd, capture=True, stream=True)
@@ -240,9 +241,10 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                     logging.info("Trying alternative Morphe command format...")
                     morphe_cmd = [
                         "java", "-jar", str(cli),
-                        "--patches", str(patches),
+                        "patch", "--patches", str(patches),
                         "--input", str(input_apk),
-                        "--output", str(output_apk)
+                        "--output", str(output_apk),
+                        "--continue-on-error"
                     ]
                     utils.run_process(morphe_cmd, capture=True, stream=True)
             else:
