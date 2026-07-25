@@ -285,7 +285,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         patchver = release.extract_version(str(patches))
         
         # Formats file naming pattern strictly to your custom style: youtube-morphe_20.47.62-v1.29.0.apk
-        output_custom_name = f"youtube-morphe_{version}-v{patchver}.apk"
+        output_custom_name = f"{app_name.lower()}-{source.lower()}_{version}-v{patchver}.apk"
         signed_apk = Path(output_custom_name)
 
         apksigner = utils.find_apksigner()
