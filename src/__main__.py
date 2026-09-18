@@ -105,7 +105,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         downloader.download_aptoide
     ]
 
-input_apk = None
+    input_apk = None
     version = None
     candidates: list[str] = []
     used_method = None
@@ -240,7 +240,6 @@ input_apk = None
                         "java", "-jar", str(cli),
                         "patch", "--patches", str(patches),
                         "--out", str(output_apk), str(input_apk),
-                        "--continue-on-error",
                         *exclude_patches, *include_patches
                     ]
                     utils.run_process(morphe_cmd, capture=True, stream=True)
@@ -251,8 +250,7 @@ input_apk = None
                         "java", "-jar", str(cli),
                         "patch", "--patches", str(patches),
                         "--input", str(input_apk),
-                        "--output", str(output_apk),
-                        "--continue-on-error"
+                        "--output", str(output_apk)
                     ]
                     utils.run_process(morphe_cmd, capture=True, stream=True)
             else:
